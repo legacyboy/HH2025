@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BUCKET="holidayhack2025.firebasestorage.app"
+API_BASE="https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o"
+
+# OPTIONAL: set a prefix to constrain the listing (URL-encoded slash)
+# Example: "gnome-documents%2F" or "gnome-avatars%2F"
+PREFIX=""
+
+# 1) List objects (entire bucket or under the prefix)
+echo "[*] Listing objects..."
+LIST_URL="$API_BASE"
+if [[ -n "$PREFIX" ]]; then
+  LIST_URL="${API_BASE}?prefix=${PREFIX}"
+fi
+
+LIST_JSON="$(curl -sS "$LIST_URL")"
+echo "$LIST_JSON" | jq -r '.items[].name' > names.txt
+
+COUNT=$(wc -l < names.txt | tr -d ' ')
+echo "[*] Found $COUNT objects to download."
+
+# 2–4) For each object, get metadata (to read downloadTokens), then download
+while IFS= read -r NAME; do
+  # URL-encode the full object name (including slashes) for the /o/<object> form
+  # jq '@uri' encodes slashes to %2F, which is required here
+  ENCODED_NAME=$(jq -nr --arg n "$NAME" '$n|@uri')
+
+  # Fetch metadata to see if a token is required
+  META_JSON="$(curl -sS "${API_BASE}/${ENCODED_NAME}")"
+  TOKEN=$(echo "$META_JSON" | jq -r '.downloadTokens // empty')
+
+  # Build the download URL
+  DL_URL="${API_BASE}/${ENCODED_NAME}?alt=media"
+  if [[ -n "$TOKEN" ]]; then
+    DL_URL="${DL_URL}&token=${TOKEN}"
+  fi
+
+  # Choose output filename (base name of the object)
+  OUT_FILE=$(basename "$NAME")
+  echo "[*] Downloading: $NAME -> $OUT_FILE"
+  curl -sS -L "$DL_URL" -o "$OUT_FILE"
+done < names.txt
+
+echo "[*] Done."
